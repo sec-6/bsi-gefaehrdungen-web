@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Liste aller elementaren und spezifischen Gefährdungen des BSI IT-Grundschutz-Kompendiums</title>
+  <link rel="stylesheet" href="css/jquery.dataTables.min.css">
+  <link href="css/select2.min.css" rel="stylesheet" />
+  <style>
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.top-bar .title h1 {
+  margin: 0;
+  font-size: 1.5em;
+  white-space: nowrap;
+}
+  h2 { padding: 0 0px; margin: 20px; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  overflow: hidden; /* kein Seiten-scroll */
+  font-family: sans-serif;
+}
+
+#csvTable_filter {
+  margin: 0px 15px;
+}
+
+#csvTable_wrapper {
+  height: 100vh;
+  padding: 10px 20px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+      table-layout: fixed; /* wichtig für fixe Breiten */
+
+}
+
+table.dataTable {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+thead, tfoot {
+  display: table-header-group;
+  background: #eee;
+}
+
+tfoot th {
+  height: 50px;
+  padding: 4px 8px;
+  vertical-align: middle;
+}
+
+/* Tabelle mit fixem Layout für die Breiten */
+table.dataTable {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed;
+}
+
+/* colgroup Breiten anpassen */
+colgroup col:nth-child(1) {
+  width: 120px;
+}
+colgroup col:nth-child(2) {
+  width: 320px;
+}
+colgroup col:nth-child(3) {
+  width: 320px;
+}
+/* letzte Spalte flexibel */
+colgroup col:nth-child(n+4) {
+  width: auto;
+}
+
+
+.select2-container .select2-selection--multiple {
+  max-height: 2.5em !important;     /* ca. 2 Zeilen Höhe */
+  overflow-y: auto !important;
+  overflow-x: hidden !important;    /* horizontale Scrollleiste aus */
+  white-space: normal !important;   /* Zeilenumbruch erlauben */
+  word-wrap: break-word !important; /* lange Wörter umbrechen */
+  padding: 2px 6px !important;
+  box-sizing: border-box;
+}
+
+tfoot th input[type="text"] {
+  width: 100%;
+  box-sizing: border-box; /* wichtig, damit padding nicht die Breite sprengt */
+  font-size: 1em;
+  padding: 2px 4px;
+}
+
+  </style>
+</head>
+<body>
+
+<table id="csvTable" class="display" style="width:100%">
+  <colgroup>
+    <col /> <!-- 1. Spalte -->
+    <col /> <!-- 2. Spalte -->
+    <col /> <!-- 3. Spalte -->
+    <col /> <!-- Rest -->
+  </colgroup>
+  <thead></thead>
+  <tfoot></tfoot>
+</table>
+
+<script src="js/jquery-3.7.1.min.js"></script>
+<script src="js/jquery.dataTables.min.js"></script>
+<script src="js/papaparse.min.js"></script>
+<script src="js/select2.min.js"></script>
+
+<script>
+function formatBulletPoints(text) {
+  if (!text) return '';
+  const lines = text.split(/\r\n|\r|\n/);
+  const result = [];
+  let listItems = [];
+
+  lines.forEach(line => {
+    const trimmed = line.trim();
+    const bulletMatch = /^([•*-])\s*(.+)/.exec(trimmed);
+
+    if (bulletMatch) {
+      listItems.push(`<li>${escapeHtml(bulletMatch[2])}</li>`);
+    } else {
+      if (listItems.length) {
+        result.push(`<ul>${listItems.join('')}</ul>`);
+        listItems = [];
+      }
+      result.push(escapeHtml(trimmed));
+    }
+  });
+
+  if (listItems.length) {
+    result.push(`<ul>${listItems.join('')}</ul>`);
+  }
+
+  return result.join('<br>');
+}
+
+function escapeHtml(text) {
+  return text.replace(/&/g, '&amp;')
+             .replace(/</g, '&lt;')
+             .replace(/>/g, '&gt;');
+}
+
+fetch('data/gefaehrdungen.csv')
+  .then(response => response.text())
+  .then(csvText => {
+    Papa.parse(csvText, {
+      header: true,
+      skipEmptyLines: true,
+      delimiter: ";",
+      complete: function(results) {
+        const rawData = results.data;
+        const headers = Object.keys(rawData[0]);
+
+        const data = rawData.map(row => {
+          const newRow = {};
+          for (let key of headers) {
+            let value = row[key] || '';
+            newRow[key] = formatBulletPoints(value);
+          }
+          return newRow;
+        });
+
+        document.querySelector('#csvTable thead').innerHTML = '<tr>' + headers.map(h => `<th>${h}</th>`).join('') + '</tr>';
+        document.querySelector('#csvTable tfoot').innerHTML = '<tr>' + headers.map(h => `<th></th>`).join('') + '</tr>';
+
+        const table = $('#csvTable').DataTable({
+          dom: '<"top-bar"<"title">f>rtip',
+          order: [],
+          data: data,
+          columns: headers.map(h => ({ data: h })),
+          paging: false,
+          /*scrollY: 'auto',
+          scrollCollapse: true,*/
+          scrollY: 'calc(100vh - 200px)', // Höhe für tbody scroll
+          scrollCollapse: false,
+          fixedHeader: true,
+          language: {
+            url: "data/de-DE.json"
+          },
+          initComplete: function () {
+  const table = this.api();
+  const headers = table.columns().header().toArray().map(h => $(h).text());
+  const selects = [];
+
+  table.columns().every(function () {
+    const column = this;
+    const colIndex = column.index();
+    const cell = $(column.footer()).empty();
+
+    // Textfilter
+    const input = $('<input type="text" placeholder="Textfilter" />')
+      .on('keyup change clear', function () {
+        column.search(this.value).draw();
+        updateAllSelects();
+      })
+      .appendTo(cell);
+
+    // Select2 Dropdown
+    const selectId = `select-filter-${colIndex}`;
+    const select = $(`<select id="${selectId}" multiple style="width: 100%"></select>`)
+      .appendTo(cell)
+      .on('change', function () {
+        applySelectFilters();
+        updateAllSelects();
+      });
+
+    selects.push({ column, select, colIndex });
+  });
+
+  function getVisibleText(cellHtml) {
+    const temp = document.createElement("div");
+    temp.innerHTML = cellHtml;
+    return (temp.textContent || temp.innerText || '').trim();
+  }
+
+  function applySelectFilters() {
+    selects.forEach(({ column, select }) => {
+      const selected = $(select).val();
+      if (selected && selected.length > 0) {
+        const pattern = selected.map(val => $.fn.dataTable.util.escapeRegex(val)).join('|');
+        column.search(pattern, true, false);
+      } else {
+        // Nicht den Textfilter löschen!
+        const currentText = $(column.footer()).find('input').val() || '';
+        column.search(currentText);
+      }
+    });
+    table.draw();
+  }
+
+  function updateAllSelects() {
+    const filteredData = table.rows({ search: 'applied' }).data().toArray();
+
+    selects.forEach(({ column, select, colIndex }) => {
+      const colTitle = headers[colIndex];
+      const currentSelection = $(select).val() || [];
+
+      const values = new Set();
+      filteredData.forEach(row => {
+        const text = getVisibleText(row[colTitle]);
+        if (text) values.add(text);
+      });
+
+      $(select).empty();
+      Array.from(values).forEach(val => {
+        const option = new Option(val, val, false, currentSelection.includes(val));
+        $(select).append(option);
+      });
+
+      $(select).trigger('change.select2');
+    });
+  }
+
+  // Initial befüllen
+  setTimeout(() => {
+    selects.forEach(({ select }) => {
+      $(select).select2({
+        placeholder: "Werte auswählen",
+        allowClear: true,
+        dropdownAutoWidth: true,
+        width: 'resolve'
+      });
+    });
+    updateAllSelects();
+  }, 0);
+
+  $('.top-bar .title').html('<h1>Liste aller elementaren und spezifischen Gefährdungen des BSI IT-Grundschutz-Kompendiums</h1>');
+}
+
+        });
+      }
+    });
+  });
+</script>
+
+</body>
+</html>
