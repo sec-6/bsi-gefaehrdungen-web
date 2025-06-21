@@ -179,8 +179,6 @@ fetch('data/gefaehrdungen.csv')
           data: data,
           columns: headers.map(h => ({ data: h })),
           paging: false,
-          /*scrollY: 'auto',
-          scrollCollapse: true,*/
           scrollY: 'calc(100vh - 200px)', // Höhe für tbody scroll
           scrollCollapse: false,
           fixedHeader: true,
@@ -188,95 +186,204 @@ fetch('data/gefaehrdungen.csv')
             url: "data/de-DE.json"
           },
           initComplete: function () {
-  const table = this.api();
-  const headers = table.columns().header().toArray().map(h => $(h).text());
-  const selects = [];
+            const table = this.api();
+            const headers = table.columns().header().toArray().map(h => $(h).text());
+            const selects = [];
+            const filterValues = {};
+            // Alle Rohdaten holen
+            const rawData = table.data().toArray();
+            window.rawData = rawData; // Nur zum Debuggen
+            let updatingSelects = false;
 
-  table.columns().every(function () {
-    const column = this;
-    const colIndex = column.index();
-    const cell = $(column.footer()).empty();
+            // Sichtbaren Text aus HTML extrahieren
+            function getVisibleText(cellHtml) {
+              const temp = document.createElement("div");
+              temp.innerHTML = cellHtml;
+              return (temp.textContent || temp.innerText || '').trim();
+            }
 
-    // Textfilter
-    const input = $('<input type="text" placeholder="Textfilter" />')
-      .on('keyup change clear', function () {
-        column.search(this.value).draw();
-        updateAllSelects();
-      })
-      .appendTo(cell);
+            // DataTable Filter-Logik (globaler Filter)
+            $.fn.dataTable.ext.search.push(function (settings, data, dataIndex) {
+              for (const key in filterValues) {
+                const isText = key.startsWith('text_');
+                const colIndex = parseInt(isText ? key.slice(5) : key, 10);
+                const cellDataRaw = table.row(dataIndex).data()[headers[colIndex]];
+                const cellText = getVisibleText(cellDataRaw).toLowerCase();
+          
+                if (isText) {
+                  const filterText = (filterValues[key] || '').toLowerCase();
+                  if (filterText && !cellText.includes(filterText)) return false;
+                } else {
+                  const selectedValues = filterValues[key];
+                  if (selectedValues && selectedValues.length > 0) {
+                    const match = selectedValues.some(val => val.toLowerCase() === cellText);
+                    if (!match) return false;
+                  }
+                }
+              }
+              return true;
+            });
 
-    // Select2 Dropdown
-    const selectId = `select-filter-${colIndex}`;
-    const select = $(`<select id="${selectId}" multiple style="width: 100%"></select>`)
-      .appendTo(cell)
-      .on('change', function () {
-        applySelectFilters();
-        updateAllSelects();
-      });
+            // Für jede Spalte Filterelemente erstellen
+            table.columns().every(function () {
+              const column = this;
+              const colIndex = column.index();
+              const footerCell = $(column.footer()).empty();
+          
+              // Textfilter input
+              $('<input type="text" placeholder="Textfilter" />')
+                .on('input', function () {
+                  filterValues[`text_${colIndex}`] = this.value;
+                  table.draw();
+                  updateAllSelects();
+                })
+                .appendTo(footerCell);
+          
+              // Select2 Mehrfachauswahl
+              const select = $('<select multiple style="width: 100%"></select>').appendTo(footerCell);
+          
+              select.on('change', function () {
+                if (updatingSelects) return;
+                
+                // val kann string oder null oder array sein
+                let val = $(this).val();
+              
+                if (!Array.isArray(val)) {
+                  val = val ? [val] : [];
+                }
+              
+                filterValues[colIndex] = val;
+              
+                table.draw();
+                updateAllSelects();
+              });
 
-    selects.push({ column, select, colIndex });
-  });
+              selects.push({ select, colIndex });
+            });
 
-  function getVisibleText(cellHtml) {
-    const temp = document.createElement("div");
-    temp.innerHTML = cellHtml;
-    return (temp.textContent || temp.innerText || '').trim();
-  }
+            // Funktion zum Aktualisieren der Select-Optionen
+            function updateAllSelects() {
+              updatingSelects = true;
+            
+              // Für jede Spalte ermitteln wir die Daten, die durch Filter der VORHERIGEN Spalten gefiltert wurden
+              selects.forEach(({ select, colIndex }) => {
+                const colTitle = headers[colIndex];
+                const currentSelection = filterValues[colIndex] || [];
+            
+                // Datenmenge, die alle Filter VORHERIGER Spalten erfüllt
+                let filteredForOptions = rawData;
+            
+                for (let i = 0; i < colIndex; i++) {
+                  const selectedValues = filterValues[i];
+                  if (selectedValues && selectedValues.length > 0) {
+                    filteredForOptions = filteredForOptions.filter(row => {
+                      const text = getVisibleText(row[headers[i]]);
+                      // mind. einer der gewählten Werte muss übereinstimmen
+                      return selectedValues.some(val => val.toLowerCase() === text.toLowerCase());
+                    });
+                  }
+                }
+            
+                // Aus der gefilterten Menge alle Werte dieser Spalte sammeln
+                const values = new Set();
+                filteredForOptions.forEach(row => {
+                  const text = getVisibleText(row[colTitle]);
+                  if (text) values.add(text);
+                });
+            
+                // Aktuelle Auswahl sicherstellen
+                currentSelection.forEach(sel => values.add(sel));
+            
+                const optionValues = Array.from(values);
+            
+                $(select).empty();
+                optionValues.forEach(val => {
+                  const option = new Option(val, val, false, currentSelection.includes(val));
+                  select[0].appendChild(option);
+                });
+            
+                // Auswahl setzen (trigger nötig für Select2)
+                $(select).val(currentSelection.length ? currentSelection : null).trigger('change.select2').trigger('select2:close');
+              });
+            
+              updatingSelects = false;
+            }
 
-  function applySelectFilters() {
-    selects.forEach(({ column, select }) => {
-      const selected = $(select).val();
-      if (selected && selected.length > 0) {
-        const pattern = selected.map(val => $.fn.dataTable.util.escapeRegex(val)).join('|');
-        column.search(pattern, true, false);
-      } else {
-        // Nicht den Textfilter löschen!
-        const currentText = $(column.footer()).find('input').val() || '';
-        column.search(currentText);
-      }
-    });
-    table.draw();
-  }
+            // Select2 einmalig initialisieren
+            selects.forEach(({ select }) => {
+              select.select2({
+                placeholder: "Werte auswählen",
+                allowClear: true,
+                dropdownAutoWidth: true,
+                width: 'resolve',
+                sorter: data => data // keine Sortierung der Optionen
+              });
+            });
 
-  function updateAllSelects() {
-    const filteredData = table.rows({ search: 'applied' }).data().toArray();
+            // Erstes Update der Select-Filteroptionen
+            updateAllSelects();
 
-    selects.forEach(({ column, select, colIndex }) => {
-      const colTitle = headers[colIndex];
-      const currentSelection = $(select).val() || [];
+            // --- Tooltip-Code ---
+            $('.top-bar .title').html(`
+              <div style="position: relative; display: inline-block;">
+                <h1 style="display: inline;">Liste aller elementaren und spezifischen Gefährdungen des BSI IT-Grundschutz-Kompendiums</h1>
+                <span id="info-tooltip" style="
+                  cursor: pointer;
+                  color: #007bff;
+                  margin-left: 8px;
+                  font-weight: normal;
+                  border-bottom: 1px dotted;
+                  font-size: 1rem;
+                  position: relative;
+                  display: inline-block;
+                ">
+                  ℹ️
+                  <div id="tooltip-content" style="
+                    display: none;
+                    position: absolute;
+                    width: 300px;
+                    background: #333;
+                    color: #fff;
+                    padding: 10px;
+                    border-radius: 5px;
+                    font-size: 0.85rem;
+                    line-height: 1.4;
+                    z-index: 10000;
+                    box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+                    top: 120%;
+                    left: 0;
+                    white-space: normal;
+                    word-break: break-word;
+                  ">
+                    <p>Die Daten basieren auf dem IT-Grundschutz-Kompendium des Bundesamts für Sicherheit in der Informationstechnik (BSI). Copyright: © Bundesamt für Sicherheit in der Informationstechnik (BSI). Die hier bereitgestellten Informatoinen wurden aus den offiziellen BSI-Quellen abgeleitet und dienen ausschließlich der Weiterverarbeitung zu Analyse- und Forschungszwecken. Die Rechte an den Inhalten verbleiben beim BSI. Dieses Projekt steht in keiner offiziellen Verbindung zum BSI.</p>
+                    <p>Code auf Github:</p>
+                    <p>
+                      <ul>
+                        <li><a href="https://github.com/sec-6/bsi-gefaehrdungen">https://github.com/sec-6/bsi-gefaehrdungen</a></li>
+                        <li><a href="https://github.com/sec-6/bsi-gefaehrdungen-web">https://github.com/sec-6/bsi-gefaehrdungen-web</a></li>
+                      </ul>
+                    </p>
+                  </div>
+                </span>
+              </div>
+            `);
 
-      const values = new Set();
-      filteredData.forEach(row => {
-        const text = getVisibleText(row[colTitle]);
-        if (text) values.add(text);
-      });
+            const $info = $('#info-tooltip');
+            const $tooltip = $('#tooltip-content');
 
-      $(select).empty();
-      Array.from(values).forEach(val => {
-        const option = new Option(val, val, false, currentSelection.includes(val));
-        $(select).append(option);
-      });
-
-      $(select).trigger('change.select2');
-    });
-  }
-
-  // Initial befüllen
-  setTimeout(() => {
-    selects.forEach(({ select }) => {
-      $(select).select2({
-        placeholder: "Werte auswählen",
-        allowClear: true,
-        dropdownAutoWidth: true,
-        width: 'resolve'
-      });
-    });
-    updateAllSelects();
-  }, 0);
-
-  $('.top-bar .title').html('<h1>Liste aller elementaren und spezifischen Gefährdungen des BSI IT-Grundschutz-Kompendiums</h1>');
-}
-
+            $info.on('click', function(e) {
+              e.stopPropagation();
+              $tooltip.toggle();
+            });
+          
+            $(document).on('click', function() {
+              $tooltip.hide();
+            });
+          
+            $tooltip.on('click', function(e) {
+              e.stopPropagation();
+            });
+          }
         });
       }
     });
